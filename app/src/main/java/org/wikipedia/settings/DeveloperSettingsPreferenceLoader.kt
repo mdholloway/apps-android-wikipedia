@@ -147,8 +147,7 @@ internal class DeveloperSettingsPreferenceLoader(fragment: PreferenceFragmentCom
             true
         }
         findPreference(R.string.preference_key_send_event_platform_test_event).onPreferenceClickListener = Preference.OnPreferenceClickListener {
-            val event = Event("/analytics/test/1.0.0", "test.instrumentation")
-            EventPlatformClient.submit(event)
+            EventPlatformClient.submit("test.instrumentation", Event())
             true
         }
     }

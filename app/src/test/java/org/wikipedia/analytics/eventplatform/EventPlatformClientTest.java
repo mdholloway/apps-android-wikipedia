@@ -30,7 +30,7 @@ import static org.mockito.Mockito.times;
 import static org.wikipedia.analytics.eventplatform.DestinationEventService.LOGGING;
 import static org.wikipedia.analytics.eventplatform.EventPlatformClient.JS_REGEXP_PATTERN;
 import static org.wikipedia.analytics.eventplatform.EventPlatformClient.STREAM_CONFIGS;
-import static org.wikipedia.analytics.eventplatform.EventPlatformClient.addEventMetadata;
+import static org.wikipedia.analytics.eventplatform.EventPlatformClient.addCoreEventMetadata;
 import static org.wikipedia.analytics.eventplatform.EventPlatformClient.getStreamConfig;
 import static org.wikipedia.analytics.eventplatform.EventPlatformClient.setStreamConfig;
 import static org.wikipedia.analytics.eventplatform.SamplingConfig.Identifier.DEVICE;
@@ -77,32 +77,24 @@ public class EventPlatformClientTest {
 
     @Test
     public void testEventSerialization() {
-        Event event = new Event("test", "test");
-        addEventMetadata(event);
+        Event event = addCoreEventMetadata("test", new Event());
         String serialized = GsonMarshaller.marshal(event);
         assertThat(serialized.contains("dt"), is(true));
         assertThat(serialized.contains("app_session_id"), is(true));
         assertThat(serialized.contains("app_install_id"), is(true));
+        assertThat(serialized.contains("domain"), is(true));
     }
 
     @Test
     public void testOutputBufferEnqueuesEventOnSubmit() {
-        Event event = new Event("test", "test");
+        Event event = new Event();
         try (
                 MockedStatic<EventPlatformClient.OutputBuffer> outputBuffer = mockStatic(EventPlatformClient.OutputBuffer.class);
                 MockedStatic<EventPlatformClient.SamplingController> samplingController = mockStatic(EventPlatformClient.SamplingController.class)
         ) {
-            samplingController.when(() -> EventPlatformClient.SamplingController.isInSample(event)).thenReturn(true);
-            EventPlatformClient.submit(event);
+            samplingController.when(() -> EventPlatformClient.SamplingController.isInSample("test")).thenReturn(true);
+            EventPlatformClient.submit("test", event);
             outputBuffer.verify(times(1), () -> EventPlatformClient.OutputBuffer.schedule(event));
-        }
-    }
-
-    @Test
-    public void testOutputBufferSendsEnqueuedEventsOnEnabled() {
-        try (MockedStatic<EventPlatformClient.OutputBuffer> outputBuffer = mockStatic(EventPlatformClient.OutputBuffer.class)) {
-            EventPlatformClient.setEnabled(true);
-            outputBuffer.verify(times(1), EventPlatformClient.OutputBuffer::sendAllScheduled);
         }
     }
 
@@ -124,25 +116,25 @@ public class EventPlatformClientTest {
 
     @Test
     public void testNeverInSampleIfNoStreamConfig() {
-        assertThat(EventPlatformClient.SamplingController.isInSample(new Event("test", "not-configured")), is(false));
+        assertThat(EventPlatformClient.SamplingController.isInSample("not-configured"), is(false));
     }
 
     @Test
     public void testAlwaysInSampleIfStreamConfiguredButNoSamplingConfig() {
         setStreamConfig(new StreamConfig("configured", null, null));
-        assertThat(EventPlatformClient.SamplingController.isInSample(new Event("test", "configured")), is(true));
+        assertThat(EventPlatformClient.SamplingController.isInSample("configured"), is(true));
     }
 
     @Test
     public void testAlwaysInSample() {
         setStreamConfig(new StreamConfig("alwaysInSample", new SamplingConfig(1.0, null), null));
-        assertThat(EventPlatformClient.SamplingController.isInSample(new Event("test", "alwaysInSample")), is(true));
+        assertThat(EventPlatformClient.SamplingController.isInSample("alwaysInSample"), is(true));
     }
 
     @Test
     public void testNeverInSample() {
         setStreamConfig(new StreamConfig("neverInSample", new SamplingConfig(0.0, null), null));
-        assertThat(EventPlatformClient.SamplingController.isInSample(new Event("test", "neverInSample")), is(false));
+        assertThat(EventPlatformClient.SamplingController.isInSample("neverInSample"), is(false));
     }
 
     @Test

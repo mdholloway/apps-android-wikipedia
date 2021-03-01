@@ -9,22 +9,52 @@ import java.util.Date;
 
 import static org.wikipedia.util.DateUtil.iso8601DateFormat;
 
-/** Base class for an Event Platform event. */
+/**
+ * Base class for an Event Platform event.
+ *
+ * TODO: Add fields whose presence or absence is to be managed by stream configuration.
+ */
 public class Event {
-    @SerializedName("$schema") @NonNull private final String schema;
-    @Nullable private final Meta meta;
-    @Nullable private String dt;
+    @SerializedName("$schema") @Nullable private String schema;
+    @Nullable private Meta meta;
+    @NonNull private String dt;
     @SerializedName("app_session_id") @Nullable private String sessionId;
     @SerializedName("app_install_id") @Nullable private String appInstallId;
 
-    public Event(@NonNull String schema, @NonNull String stream) {
-        this.schema = schema;
-        this.meta = new Meta(stream);
+    public Event() {
         this.dt = iso8601DateFormat(new Date());
     }
 
-    @NonNull public String getStream() {
-        return meta.getStream();
+    public void setSchema(@NonNull String schema) {
+        this.schema = schema;
+    }
+
+    @Nullable public String getStream() {
+        if (this.meta == null) {
+            return null;
+        }
+        return this.meta.stream;
+    }
+
+    public void setStream(@NonNull String stream) {
+        if (this.meta == null) {
+            this.meta = new Meta();
+        }
+        this.meta.stream = stream;
+    }
+
+    @Nullable public String getDomain() {
+        if (this.meta == null) {
+            return null;
+        }
+        return this.meta.domain;
+    }
+
+    public void setDomain(@NonNull String domain) {
+        if (this.meta == null) {
+            this.meta = new Meta();
+        }
+        this.meta.domain = domain;
     }
 
     public void setSessionId(@NonNull String sessionId) {
@@ -36,14 +66,7 @@ public class Event {
     }
 
     private static final class Meta {
-        @NonNull private final String stream;
-
-        private Meta(@NonNull String stream) {
-            this.stream = stream;
-        }
-
-        @NonNull private String getStream() {
-            return stream;
-        }
+        @Nullable private String stream;
+        @Nullable private String domain;
     }
 }

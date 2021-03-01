@@ -10,9 +10,11 @@ import org.wikipedia.util.log.L;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
 import io.reactivex.rxjava3.schedulers.Schedulers;
 
@@ -35,15 +37,13 @@ public final class EventPlatformClient {
      */
     static Map<String, StreamConfig> STREAM_CONFIGS = new HashMap<>();
 
-    /*
-     * When ENABLED is false, items can be enqueued but not dequeued.
-     * Timers will not be set for enqueued items.
-     * QUEUE will not grow beyond MAX_QUEUE_SIZE.
-     *
-     * Inputs: network connection state on/off, connection state bad y/n?
-     * Taken out of iOS client, but flag can be set on the request object to wait until connected to send
+    /**
+     * Map of stream names to target schema versions.
      */
-    private static boolean ENABLED = WikipediaApp.getInstance().isOnline();
+    private static final HashMap<String, String> SCHEMAS = new HashMap<String, String>() {{
+        put("test.instrumentation", "/analytics/test/1.0.0");
+        put("android.user_contribution_screen", "/analytics/mobile_apps/android_user_contribution_screen/2.0.0");
+    }};
 
     /**
      * A regular expression to match JavaScript regular expression literals. (How meta!)
@@ -98,32 +98,50 @@ public final class EventPlatformClient {
     }
 
     /**
-     * Set whether the client is enabled. This can react to device online/offline state as well
-     * as other considerations.
-     */
-    public static synchronized void setEnabled(boolean enabled) {
-        ENABLED = enabled;
-
-        if (ENABLED) {
-            /*
-             * Try immediately to send any enqueued items. Otherwise another
-             * item must be enqueued before sending is triggered.
-             */
-            OutputBuffer.sendAllScheduled();
-        }
-    }
-
-    /**
-     * Submit an event to be enqueued and sent to the Event Platform
+     * Submit an event to be enqueued and sent to the Event Platform for each destination stream
+     * that applies to the submitted event.
      *
-     * @param event event
+     * If the instrument declares a name that is the name of a stream, the instrument name is
+     * considered to be the stream name. Otherwise, we iterate over the stream configs and produce
+     * an event to each stream that subscribes to the provided instrument name.
+     *
+     * FIXME: Build an instrument-to-streams index when stream configs are loaded rather than
+     *  (potentially) iterating over stream configs each time an event is received.
+     *
+     * @param instrument instrument name
+     * @param event event data
      */
-    public static synchronized void submit(Event event) {
-        if (!SamplingController.isInSample(event)) {
-            return;
+    public static synchronized void submit(String instrument, Event event) {
+        Set<String> destinationStreams = new HashSet<>();
+
+        if (STREAM_CONFIGS.containsKey(instrument)) {
+            // The instrument name provided is a configured stream name; produce to it.
+            destinationStreams.add(instrument);
+        } else {
+            // Iterate over all stream configs to collect destination streams.
+            for (String stream : STREAM_CONFIGS.keySet()) {
+                StreamConfig config = STREAM_CONFIGS.get(stream);
+                List<String> subscribedInstruments = config.getSubscribedInstruments();
+                for (String subscribed : subscribedInstruments) {
+                    if (subscribed.equals(instrument)) {
+                        destinationStreams.add(stream);
+                    }
+                }
+            }
         }
-        addEventMetadata(event);
-        OutputBuffer.schedule(event);
+
+        for (String stream : destinationStreams) {
+            if (!SamplingController.isInSample(stream)) {
+                return;
+            }
+            StreamConfig config = getStreamConfig(stream);
+            if (!FilterByValueController.filterByValue(config, event)) {
+                return;
+            }
+            addCoreEventMetadata(stream, event);
+            // addConfigurableEventMetadata(config, event);
+            OutputBuffer.schedule(event);
+        }
     }
 
     /**
@@ -133,11 +151,35 @@ public final class EventPlatformClient {
      * - app_session_id: the current session ID
      * - app_install_id: app install ID
      *
-     * @param event event
+     * @param stream stream name
+     * @param event event data
+     * @return updated event data object
+     * @throws RuntimeException if no schema is defined for the indicated event type
      */
-    static void addEventMetadata(Event event) {
-        event.setSessionId(AssociationController.getSessionId());
+    static Event addCoreEventMetadata(String stream, Event event) {
+        String schema = SCHEMAS.get(stream);
+        if (schema == null) {
+            throw new RuntimeException("No schema is registered for stream " + stream);
+        }
+        event.setSchema(schema);
         event.setAppInstallId(Prefs.getAppInstallId());
+        event.setSessionId(AssociationController.getSessionId());
+        event.setStream(stream);
+
+        // Default meta.domain to the hostname for the current WikiSite. If a different domain
+        // actually applies to the event, it should be provided by the caller. If no domain applies,
+        // the caller can set the domain to an empty string to avoid its being set by default here.
+        if (event.getDomain() == null) {
+            String hostname = WikipediaApp.getInstance().getWikiSite().uri().getHost();
+            event.setDomain(hostname);
+        }
+        return event;
+    }
+
+    static Event addConfigurableEventMetadata(StreamConfig config, Event event) {
+        List<String> requestedValues = config.getRequestedValues();
+        // TODO: Decide on supported configurable metadata values, and add support for them.
+        return event;
     }
 
     /**
@@ -164,9 +206,9 @@ public final class EventPlatformClient {
         private static final Runnable SEND_RUNNABLE = OutputBuffer::sendAllScheduled;
 
         static synchronized void sendAllScheduled() {
-            WikipediaApp.getInstance().getMainThreadHandler().removeCallbacks(SEND_RUNNABLE);
-
-            if (ENABLED) {
+            WikipediaApp app = WikipediaApp.getInstance();
+            app.getMainThreadHandler().removeCallbacks(SEND_RUNNABLE);
+            if (isEnabled()) {
                 send();
                 QUEUE.clear();
             }
@@ -178,18 +220,17 @@ public final class EventPlatformClient {
          * @param event event data
          */
         static synchronized void schedule(Event event) {
-            if (ENABLED || QUEUE.size() <= MAX_QUEUE_SIZE) {
-                QUEUE.add(event);
+            if (!isEnabled()) {
+                return;
             }
+            QUEUE.add(event);
 
-            if (ENABLED) {
-                if (QUEUE.size() >= MAX_QUEUE_SIZE) {
-                    sendAllScheduled();
-                } else {
-                    //The arrival of a new item interrupts the timer and resets the countdown.
-                    WikipediaApp.getInstance().getMainThreadHandler().removeCallbacks(SEND_RUNNABLE);
-                    WikipediaApp.getInstance().getMainThreadHandler().postDelayed(SEND_RUNNABLE, WAIT_MS);
-                }
+            if (QUEUE.size() >= MAX_QUEUE_SIZE) {
+                sendAllScheduled();
+            } else {
+                //The arrival of a new item interrupts the timer and resets the countdown.
+                WikipediaApp.getInstance().getMainThreadHandler().removeCallbacks(SEND_RUNNABLE);
+                WikipediaApp.getInstance().getMainThreadHandler().postDelayed(SEND_RUNNABLE, WAIT_MS);
             }
         }
 
@@ -208,9 +249,7 @@ public final class EventPlatformClient {
                 eventsByStream.get(stream).add(event);
             }
             for (String stream : eventsByStream.keySet()) {
-                if (isEventLoggingEnabled()) {
-                    sendEventsForStream(getStreamConfig(stream), eventsByStream.get(stream));
-                }
+                sendEventsForStream(getStreamConfig(stream), eventsByStream.get(stream));
             }
         }
 
@@ -336,12 +375,10 @@ public final class EventPlatformClient {
         static Map<String, Boolean> SAMPLING_CACHE = new HashMap<>();
 
         /**
-         * @param event event
+         * @param stream stream name
          * @return true if in sample or false otherwise
          */
-        static boolean isInSample(Event event) {
-            String stream = event.getStream();
-
+        static boolean isInSample(String stream) {
             if (SAMPLING_CACHE.containsKey(stream)) {
                 return SAMPLING_CACHE.get(stream);
             }
@@ -402,6 +439,10 @@ public final class EventPlatformClient {
     private static synchronized void updateStreamConfigs(@NonNull Map<String, StreamConfig> streamConfigs) {
         STREAM_CONFIGS = streamConfigs;
         Prefs.setStreamConfigs(STREAM_CONFIGS);
+    }
+
+    private static boolean isEnabled() {
+        return WikipediaApp.getInstance().isOnline() && isEventLoggingEnabled();
     }
 
     public static void setUpStreamConfigs() {

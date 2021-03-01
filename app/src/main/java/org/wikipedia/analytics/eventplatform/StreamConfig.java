@@ -17,15 +17,11 @@ public class StreamConfig {
 
     @SerializedName("schema_title") @Nullable private String schemaTitle;
 
-    @SerializedName("topic_prefixes") @Nullable private List<String> topicPrefixes;
-
-    @Nullable private List<String> topics;
-
-    @SerializedName("canary_events_enabled") boolean canaryEventsEnabled;
-
     @SerializedName("destination_event_service") @Nullable private DestinationEventService destinationEventService;
 
     @SerializedName("sampling") @Nullable private SamplingConfig samplingConfig;
+
+    @SerializedName("producer") @Nullable private ProducerConfig producerConfig;
 
     /**
      * Constructor for testing.
@@ -45,6 +41,18 @@ public class StreamConfig {
         this.destinationEventService = destinationEventService;
     }
 
+    /**
+     * Constructor for testing.
+     *
+     * In practice, filtering values will be set by Gson during deserialization using reflection.
+     *
+     * @param filteringValues filtering values
+     */
+    @VisibleForTesting StreamConfig(FilterByValueController.FilteringValues filteringValues) {
+        this.producerConfig = new ProducerConfig();
+        this.producerConfig.filteringValues = filteringValues;
+    }
+
     @NonNull public String getStreamName() {
         return StringUtils.defaultString(streamName);
     }
@@ -53,16 +61,33 @@ public class StreamConfig {
         return StringUtils.defaultString(schemaTitle);
     }
 
-    @NonNull public List<String> getTopicPrefixes() {
-        return topicPrefixes != null ? topicPrefixes : Collections.emptyList();
+    @NonNull public List<String> getSubscribedInstruments() {
+        List<String> dflt = Collections.emptyList();
+        if (producerConfig == null) {
+            return dflt;
+        }
+        if (producerConfig.subscribedInstruments == null) {
+            return dflt;
+        }
+        return producerConfig.subscribedInstruments;
     }
 
-    @NonNull public List<String> getTopics() {
-        return topics != null ? topics : Collections.emptyList();
+    @NonNull public List<String> getRequestedValues() {
+        List<String> dflt = Collections.emptyList();
+        if (producerConfig == null) {
+            return dflt;
+        }
+        if (producerConfig.requestedValues == null) {
+            return dflt;
+        }
+        return producerConfig.requestedValues;
     }
 
-    public boolean areCanaryEventsEnabled() {
-        return canaryEventsEnabled;
+    @Nullable public FilterByValueController.FilteringValues getFilteringValues() {
+        if (producerConfig == null) {
+            return null;
+        }
+        return producerConfig.filteringValues;
     }
 
     @NonNull public DestinationEventService getDestinationEventService() {
@@ -71,6 +96,12 @@ public class StreamConfig {
 
     @Nullable public SamplingConfig getSamplingConfig() {
         return samplingConfig;
+    }
+
+    static final class ProducerConfig {
+        @SerializedName("from_instrument") @Nullable private List<String> subscribedInstruments;
+        @SerializedName("provide_values") @Nullable private List<String> requestedValues;
+        @SerializedName("filter_values") @Nullable private FilterByValueController.FilteringValues filteringValues;
     }
 
 }
