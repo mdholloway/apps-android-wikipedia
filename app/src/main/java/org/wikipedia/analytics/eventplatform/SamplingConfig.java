@@ -8,9 +8,6 @@ import com.google.gson.annotations.SerializedName;
 
 /**
  * Represents the sampling config component of a stream configuration.
- *
- * The boxed Double type is used instead of the double primitive because its value may be null,
- * which denotes that the stream should always be *included*.
  */
 class SamplingConfig {
 
@@ -21,9 +18,8 @@ class SamplingConfig {
     }
 
     private double rate = 1.0;
-    @Nullable private Identifier identifier;
+    @NonNull private Identifier identifier = Identifier.SESSION;
 
-    // This constructor is needed for correct Gson deserialization. Do not remove!
     SamplingConfig() { }
 
     @VisibleForTesting SamplingConfig(double rate, @Nullable Identifier identifier) {
@@ -36,7 +32,7 @@ class SamplingConfig {
     }
 
     @NonNull public Identifier getIdentifier() {
-        return identifier != null ? identifier : Identifier.SESSION;
+        return identifier;
     }
 
 }

@@ -41,7 +41,7 @@ public final class EventPlatformClient {
      * Map of instrument names to the streams to which they should produce events.
      * TODO: Transform stream configs rather than holding separate structures?
      */
-    static Map<String, Set<String>> INSTRUMENTS_TO_STREAMS = new HashMap<>();
+    static Map<String, Set<String>> EVENTS_TO_STREAMS = new HashMap<>();
 
     /**
      * Map of stream names to target schema versions.
@@ -122,11 +122,11 @@ public final class EventPlatformClient {
      * @param event event data
      */
     public static synchronized void submit(String instrument, Event event) {
-        if (!INSTRUMENTS_TO_STREAMS.containsKey(instrument)) {
+        if (!EVENTS_TO_STREAMS.containsKey(instrument)) {
             return;
         }
 
-        for (String stream : INSTRUMENTS_TO_STREAMS.get(instrument)) {
+        for (String stream : EVENTS_TO_STREAMS.get(instrument)) {
             if (!SamplingController.isInSample(stream)) {
                 return;
             }
@@ -135,7 +135,7 @@ public final class EventPlatformClient {
                 return;
             }
             addCoreEventMetadata(stream, event);
-            // addConfigurableEventMetadata(config, event);
+            addRequestedProducerContext(config, event);
             OutputBuffer.schedule(event);
         }
     }
@@ -172,9 +172,9 @@ public final class EventPlatformClient {
         return event;
     }
 
-    static Event addConfigurableEventMetadata(StreamConfig config, Event event) {
-        List<String> requestedValues = config.getRequestedValues();
+    static Event addRequestedProducerContext(StreamConfig config, Event event) {
         // TODO: Decide on supported configurable metadata values, and add support for them.
+        // https://docs.google.com/document/d/1Z_KRHWw7hNXldePxJP1YTvxJHOtKzZ3kSTo7YPkdp4k
         return event;
     }
 
@@ -426,14 +426,14 @@ public final class EventPlatformClient {
     }
 
     private static synchronized void updateStreamConfigs(@NonNull Map<String, StreamConfig> streamConfigs) {
-        Map<String, Set<String>> instrumentsToStreams = new HashMap<>();
+        Map<String, Set<String>> eventsToStreams = new HashMap<>();
 
         for (Map.Entry<String, StreamConfig> entry : STREAM_CONFIGS.entrySet()) {
-            Set<String> subscribedInstruments = new HashSet<>(entry.getValue().getSubscribedInstruments());
-            instrumentsToStreams.put(entry.getKey(), subscribedInstruments);
+            Set<String> subscribedEvents = new HashSet<>(entry.getValue().getSubscribedEvents());
+            eventsToStreams.put(entry.getKey(), subscribedEvents);
         }
 
-        INSTRUMENTS_TO_STREAMS = instrumentsToStreams;
+        EVENTS_TO_STREAMS = eventsToStreams;
         STREAM_CONFIGS = streamConfigs;
     }
 
