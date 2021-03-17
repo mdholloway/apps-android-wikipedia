@@ -38,6 +38,12 @@ public final class EventPlatformClient {
     static Map<String, StreamConfig> STREAM_CONFIGS = new HashMap<>();
 
     /**
+     * Map of instrument names to the streams to which they should produce events.
+     * TODO: Transform stream configs rather than holding separate structures?
+     */
+    static Map<String, Set<String>> INSTRUMENTS_TO_STREAMS = new HashMap<>();
+
+    /**
      * Map of stream names to target schema versions.
      */
     private static final HashMap<String, String> SCHEMAS = new HashMap<String, String>() {{
@@ -52,6 +58,17 @@ public final class EventPlatformClient {
      * present.
      */
     static String JS_REGEXP_PATTERN = "^/.*/[gimsuy]{0,6}$";
+
+    /**
+     * Fetch stream configs from the MW API and set them up for use for the duration of the
+     * app lifecycle.
+     */
+    public static void setUpStreamConfigs() {
+        ServiceFactory.get(new WikiSite(META_WIKI_BASE_URI))
+                .getStreamConfigs()
+                .subscribeOn(Schedulers.io())
+                .subscribe(response -> updateStreamConfigs(response.getStreamConfigs()), L::e);
+    }
 
     /**
      * Get the stream config for a given stream name.
@@ -101,36 +118,15 @@ public final class EventPlatformClient {
      * Submit an event to be enqueued and sent to the Event Platform for each destination stream
      * that applies to the submitted event.
      *
-     * If the instrument declares a name that is the name of a stream, the instrument name is
-     * considered to be the stream name. Otherwise, we iterate over the stream configs and produce
-     * an event to each stream that subscribes to the provided instrument name.
-     *
-     * FIXME: Build an instrument-to-streams index when stream configs are loaded rather than
-     *  (potentially) iterating over stream configs each time an event is received.
-     *
      * @param instrument instrument name
      * @param event event data
      */
     public static synchronized void submit(String instrument, Event event) {
-        Set<String> destinationStreams = new HashSet<>();
-
-        if (STREAM_CONFIGS.containsKey(instrument)) {
-            // The instrument name provided is a configured stream name; produce to it.
-            destinationStreams.add(instrument);
-        } else {
-            // Iterate over all stream configs to collect destination streams.
-            for (String stream : STREAM_CONFIGS.keySet()) {
-                StreamConfig config = STREAM_CONFIGS.get(stream);
-                List<String> subscribedInstruments = config.getSubscribedInstruments();
-                for (String subscribed : subscribedInstruments) {
-                    if (subscribed.equals(instrument)) {
-                        destinationStreams.add(stream);
-                    }
-                }
-            }
+        if (!INSTRUMENTS_TO_STREAMS.containsKey(instrument)) {
+            return;
         }
 
-        for (String stream : destinationStreams) {
+        for (String stream : INSTRUMENTS_TO_STREAMS.get(instrument)) {
             if (!SamplingController.isInSample(stream)) {
                 return;
             }
@@ -429,25 +425,20 @@ public final class EventPlatformClient {
 
     }
 
-    private static void refreshStreamConfigs() {
-        ServiceFactory.get(new WikiSite(META_WIKI_BASE_URI))
-                .getStreamConfigs()
-                .subscribeOn(Schedulers.io())
-                .subscribe(response -> updateStreamConfigs(response.getStreamConfigs()), L::e);
-    }
-
     private static synchronized void updateStreamConfigs(@NonNull Map<String, StreamConfig> streamConfigs) {
+        Map<String, Set<String>> instrumentsToStreams = new HashMap<>();
+
+        for (Map.Entry<String, StreamConfig> entry : STREAM_CONFIGS.entrySet()) {
+            Set<String> subscribedInstruments = new HashSet<>(entry.getValue().getSubscribedInstruments());
+            instrumentsToStreams.put(entry.getKey(), subscribedInstruments);
+        }
+
+        INSTRUMENTS_TO_STREAMS = instrumentsToStreams;
         STREAM_CONFIGS = streamConfigs;
-        Prefs.setStreamConfigs(STREAM_CONFIGS);
     }
 
     private static boolean isEnabled() {
         return WikipediaApp.getInstance().isOnline() && isEventLoggingEnabled();
-    }
-
-    public static void setUpStreamConfigs() {
-        STREAM_CONFIGS = Prefs.getStreamConfigs();
-        refreshStreamConfigs();
     }
 
     private EventPlatformClient() {
